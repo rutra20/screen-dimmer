@@ -31,7 +31,7 @@ low-blue-light screen.
 
 ## Quick start
 
-1. Download `ScreenDimmer.exe` from [Releases](../../releases).
+1. Download `ScreenDimmer.exe` from the [Releases page](https://github.com/rutra20/screen-dimmer/releases/latest).
 2. Run it. The panel appears in the bottom-right corner.
 3. Drag the sliders, or use the hotkeys.
 
