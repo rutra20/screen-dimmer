@@ -1,5 +1,7 @@
 # Build artifacts
 dist/
+bin/
+obj/
 *.exe
 *.pdb
 *.user

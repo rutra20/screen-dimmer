@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Cross-platform compile check only: builds src/ScreenDimmer.cs against the
+    .NET Framework 4.x reference assemblies so syntax/API errors show up on
+    Linux (see the compile-check job in .github/workflows/build.yml).
+    The shipped binary is still produced by build.cmd with the csc.exe that
+    ships with Windows.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>ScreenDimmer</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!-- csc.exe from .NET Framework 4.x only understands C# 5; keep the check
+         at the same language level so newer syntax cannot pass here and fail
+         in the Windows build. -->
+    <LangVersion>5</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="ScreenDimmer.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

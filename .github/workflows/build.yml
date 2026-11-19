@@ -32,3 +32,21 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/ScreenDimmer.exe
+
+  # Cross-platform compile check: compiles the same source on Linux against the
+  # .NET Framework reference assemblies, so syntax/API errors fail fast on every
+  # push instead of only being caught by the Windows build.
+  compile-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Compile against the .NET Framework reference assemblies
+        run: dotnet build src/ScreenDimmer.CompileCheck.csproj --nologo -warnaserror
