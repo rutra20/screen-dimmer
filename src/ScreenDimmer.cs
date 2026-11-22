@@ -16,8 +16,13 @@ namespace ScreenDimmer
 {
     internal static class Native
     {
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool SetProcessDpiAwarenessContext(IntPtr dpiContext);
+
         [DllImport("user32.dll")]
         public static extern bool SetProcessDPIAware();
+
+        public static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new IntPtr(-4);
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
@@ -47,6 +52,10 @@ namespace ScreenDimmer
         public const int WM_SYSCOMMAND = 0x0112;
         public const int SC_MONITORPOWER = 0xF170;
         public static readonly IntPtr HWND_BROADCAST = new IntPtr(0xFFFF);
+
+        public const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+        public const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+        public const int DWMWCP_ROUND = 2;
     }
 
     /// <summary>Full-screen colour layer that never takes focus or clicks.</summary>
@@ -120,6 +129,7 @@ namespace ScreenDimmer
         private Color accent = Color.FromArgb(250, 204, 21);
 
         public event EventHandler ValueChanged;
+        public event EventHandler DragFinished;
 
         public LevelSlider()
         {
@@ -254,6 +264,7 @@ namespace ScreenDimmer
             {
                 dragging = false;
                 Capture = false;
+                if (DragFinished != null) DragFinished(this, EventArgs.Empty);
             }
             base.OnMouseUp(e);
         }
@@ -272,6 +283,192 @@ namespace ScreenDimmer
             if (ratio < 0) ratio = 0;
             if (ratio > 1) ratio = 1;
             Value = minimum + (int)Math.Round((maximum - minimum) * ratio);
+        }
+    }
+
+    /// <summary>Subtle on-screen display (OSD) HUD shown when adjusting settings via hotkeys.</summary>
+    internal sealed class OsdForm : Form
+    {
+        private string titleText = string.Empty;
+        private string valueText = string.Empty;
+        private int currentPercent;
+        private Color accentColor = Theme.AccentDim;
+        private readonly System.Windows.Forms.Timer hideTimer = new System.Windows.Forms.Timer();
+        private readonly System.Windows.Forms.Timer fadeTimer = new System.Windows.Forms.Timer();
+
+        public OsdForm()
+        {
+            FormBorderStyle = FormBorderStyle.None;
+            StartPosition = FormStartPosition.Manual;
+            ShowInTaskbar = false;
+            TopMost = true;
+            ControlBox = false;
+            MinimizeBox = false;
+            MaximizeBox = false;
+            Size = new Size(200, 52);
+            BackColor = Theme.Background;
+            ForeColor = Theme.Text;
+            DoubleBuffered = true;
+            Opacity = 0.0;
+
+            hideTimer.Interval = 1200;
+            hideTimer.Tick += delegate
+            {
+                hideTimer.Stop();
+                fadeTimer.Start();
+            };
+
+            fadeTimer.Interval = 15;
+            fadeTimer.Tick += delegate
+            {
+                double next = Opacity - 0.12;
+                if (next <= 0.0)
+                {
+                    Opacity = 0.0;
+                    fadeTimer.Stop();
+                    Hide();
+                }
+                else
+                {
+                    Opacity = next;
+                }
+            };
+        }
+
+        protected override bool ShowWithoutActivation
+        {
+            get { return true; }
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.ExStyle |= 0x00000020; // WS_EX_TRANSPARENT - click-through
+                cp.ExStyle |= 0x00000080; // WS_EX_TOOLWINDOW - no Alt+Tab entry
+                cp.ExStyle |= 0x08000000; // WS_EX_NOACTIVATE - never steal focus
+                cp.ClassStyle |= 0x00020000; // CS_DROPSHADOW
+                return cp;
+            }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_NCHITTEST = 0x0084;
+            const int WM_MOUSEACTIVATE = 0x0021;
+            if (m.Msg == WM_NCHITTEST)
+            {
+                m.Result = new IntPtr(-1); // HTTRANSPARENT
+                return;
+            }
+            if (m.Msg == WM_MOUSEACTIVATE)
+            {
+                m.Result = new IntPtr(3); // MA_NOACTIVATE
+                return;
+            }
+            base.WndProc(ref m);
+        }
+
+        public void ShowOsd(string title, string value, int percent, Color accent)
+        {
+            titleText = title;
+            valueText = value;
+            currentPercent = Math.Max(0, Math.Min(100, percent));
+            accentColor = accent;
+
+            Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+            Location = new Point(wa.Left + (wa.Width - Width) / 2, wa.Bottom - Height - 52);
+
+            fadeTimer.Stop();
+            Opacity = 0.95;
+            Invalidate();
+
+            if (!Visible)
+            {
+                Show();
+            }
+
+            TopMost = false;
+            TopMost = true;
+
+            hideTimer.Stop();
+            hideTimer.Start();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+
+            using (GraphicsPath path = RoundedPath(new Rectangle(0, 0, Width - 1, Height - 1), 10))
+            using (SolidBrush bg = new SolidBrush(Theme.Background))
+            using (Pen border = new Pen(Theme.Border))
+            {
+                g.FillPath(bg, path);
+                g.DrawPath(border, path);
+            }
+
+            using (Font captionFont = Theme.Font(8.25f, FontStyle.Regular))
+            using (Font valFont = Theme.Font(8.25f, FontStyle.Bold))
+            using (SolidBrush mutedBrush = new SolidBrush(Theme.Muted))
+            using (SolidBrush textBrush = new SolidBrush(Theme.Text))
+            {
+                g.DrawString(titleText, captionFont, mutedBrush, 14, 8);
+                SizeF valSize = g.MeasureString(valueText, valFont);
+                g.DrawString(valueText, valFont, textBrush, Width - 14 - valSize.Width, 8);
+            }
+
+            const int trackX = 14;
+            const int trackY = 32;
+            int trackW = Width - 28;
+            const int trackH = 5;
+
+            using (GraphicsPath groove = RoundedPath(new Rectangle(trackX, trackY, trackW, trackH), 2))
+            using (SolidBrush trackBrush = new SolidBrush(Theme.Track))
+            {
+                g.FillPath(trackBrush, groove);
+            }
+
+            int fillW = (int)Math.Round(trackW * (currentPercent / 100.0));
+            if (fillW > 0)
+            {
+                using (GraphicsPath filled = RoundedPath(new Rectangle(trackX, trackY, Math.Max(trackH, fillW), trackH), 2))
+                using (SolidBrush barBrush = new SolidBrush(accentColor))
+                {
+                    g.FillPath(barBrush, filled);
+                }
+            }
+        }
+
+        private static GraphicsPath RoundedPath(Rectangle rect, int radius)
+        {
+            GraphicsPath path = new GraphicsPath();
+            int d = radius * 2;
+            if (d <= 0)
+            {
+                path.AddRectangle(rect);
+                return path;
+            }
+            path.AddArc(rect.X, rect.Y, d, d, 180, 90);
+            path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
+            path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
+            path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                hideTimer.Stop();
+                hideTimer.Dispose();
+                fadeTimer.Stop();
+                fadeTimer.Dispose();
+            }
+            base.Dispose(disposing);
         }
     }
 
@@ -335,16 +532,25 @@ namespace ScreenDimmer
         private NotifyIcon tray;
         private ToolStripMenuItem autoStartItem;
         private readonly System.Windows.Forms.Timer fadeTimer = new System.Windows.Forms.Timer();
+        private readonly System.Windows.Forms.Timer saveTimer = new System.Windows.Forms.Timer();
+        private readonly System.Windows.Forms.Timer animTimer = new System.Windows.Forms.Timer();
+        private OsdForm osd;
 
         private int level = 40;
         private int warm;
+        private int targetLevel = -1;
+        private int targetWarm = -1;
         private bool updating;
         private bool draggingPanel;
+        private bool allowVisible;
+        private bool usesDwmRounding;
         private Point dragStartCursor;
         private Point dragStartLocation;
 
-        public PanelForm()
+        public PanelForm(bool startInTray)
         {
+            allowVisible = !startInTray;
+
             settingsPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "ScreenDimmer",
@@ -367,14 +573,28 @@ namespace ScreenDimmer
             tips.ReshowDelay = 80;
             BuildUi();
             BuildTray();
+            osd = new OsdForm();
             CreateOverlays();
             MoveToSavedPlace();
 
             fadeTimer.Interval = 15;
             fadeTimer.Tick += OnFadeTick;
+
+            saveTimer.Interval = 400;
+            saveTimer.Tick += delegate
+            {
+                saveTimer.Stop();
+                SaveSettings();
+            };
+
+            animTimer.Interval = 15;
+            animTimer.Tick += OnAnimTick;
+
             Opacity = 1.0;
 
             SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+            SystemEvents.PowerModeChanged += OnPowerModeChanged;
+            SystemEvents.SessionSwitch += OnSessionSwitch;
         }
 
         // ---------- chrome ----------
@@ -390,29 +610,59 @@ namespace ScreenDimmer
             }
         }
 
+        protected override void SetVisibleCore(bool value)
+        {
+            if (!allowVisible)
+            {
+                value = false;
+                if (!IsHandleCreated) CreateHandle();
+            }
+            base.SetVisibleCore(value);
+        }
+
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            ApplyRoundedShape();
+            ApplyWindowStyle();
+            RegisterHotkeys();
+        }
 
+        private void ApplyWindowStyle()
+        {
             try
             {
                 int dark = 1;
-                Native.DwmSetWindowAttribute(Handle, 20, ref dark, sizeof(int));
+                Native.DwmSetWindowAttribute(Handle, Native.DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
+
+                int cornerPref = Native.DWMWCP_ROUND;
+                int hr = Native.DwmSetWindowAttribute(Handle, Native.DWMWA_WINDOW_CORNER_PREFERENCE, ref cornerPref, sizeof(int));
+                if (hr == 0)
+                {
+                    usesDwmRounding = true;
+                }
             }
             catch
             {
+            }
+
+            if (!usesDwmRounding)
+            {
+                ApplyRoundedShape();
             }
         }
 
         protected override void OnResize(EventArgs e)
         {
             base.OnResize(e);
-            ApplyRoundedShape();
+            if (!usesDwmRounding)
+            {
+                ApplyRoundedShape();
+            }
         }
 
         private void ApplyRoundedShape()
         {
+            if (usesDwmRounding) return;
             if (Width <= 0 || Height <= 0 || !IsHandleCreated) return;
 
             int diameter = CornerRadius * 2;
@@ -443,6 +693,16 @@ namespace ScreenDimmer
             return path;
         }
 
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (keyData == Keys.Escape)
+            {
+                Hide();
+                return true;
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
         // ---------- interface ----------
 
         private void BuildUi()
@@ -466,8 +726,8 @@ namespace ScreenDimmer
             title.MouseUp += OnDragEnd;
 
             Button close = MakeCloseButton(PanelWidth - 34, 7);
-            close.Click += delegate { Close(); };
-            tips.SetToolTip(close, "Exit (Ctrl+Alt+Q)");
+            close.Click += delegate { Hide(); };
+            tips.SetToolTip(close, "Hide to tray (Esc)");
 
             Label dimCaption = new Label();
             dimCaption.Text = "Dim";
@@ -490,6 +750,7 @@ namespace ScreenDimmer
             dimSlider.Accent = Theme.AccentDim;
             dimSlider.Value = level;
             dimSlider.ValueChanged += OnDimChanged;
+            dimSlider.DragFinished += delegate { SaveSettings(); };
 
             Label warmCaption = new Label();
             warmCaption.Text = "Warmth";
@@ -512,6 +773,7 @@ namespace ScreenDimmer
             warmSlider.Accent = Theme.AccentWarm;
             warmSlider.Value = warm;
             warmSlider.ValueChanged += OnWarmChanged;
+            warmSlider.DragFinished += delegate { SaveSettings(); };
 
             Button offButton = MakeButton("Screen off", 10, 128, 144);
             offButton.Click += delegate { TurnOffScreen(); };
@@ -519,7 +781,7 @@ namespace ScreenDimmer
 
             Button hideButton = MakeButton("Hide", 164, 128, 94);
             hideButton.Click += delegate { Hide(); };
-            tips.SetToolTip(hideButton, "Hide to tray (Ctrl+Alt+D)");
+            tips.SetToolTip(hideButton, "Hide to tray (Esc)");
 
             Controls.Add(title);
             Controls.Add(close);
@@ -531,7 +793,7 @@ namespace ScreenDimmer
             Controls.Add(warmSlider);
             Controls.Add(offButton);
             Controls.Add(hideButton);
-            Controls.Add(dragBar); // last: sits behind the title label
+            Controls.Add(dragBar);
         }
 
         private Button MakeButton(string text, int x, int y, int width)
@@ -600,11 +862,11 @@ namespace ScreenDimmer
             menu.ShowImageMargin = false;
 
             menu.Items.Add("Show panel\tCtrl+Alt+D", null, delegate { ShowPanel(); });
-            menu.Items.Add("Dim off", null, delegate { SetLevel(0); });
-            menu.Items.Add("Dim 40%", null, delegate { SetLevel(40); });
+            menu.Items.Add("Dim off", null, delegate { AnimateTo(0, warm); });
+            menu.Items.Add("Dim 40%", null, delegate { AnimateTo(40, warm); });
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("Neutral (6500 K)", null, delegate { SetWarm(0); });
-            menu.Items.Add("Warm (3700 K)", null, delegate { SetWarm(74); });
+            menu.Items.Add("Neutral (6500 K)", null, delegate { AnimateTo(level, 0); });
+            menu.Items.Add("Warm (3700 K)", null, delegate { AnimateTo(level, 74); });
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Screen off\tCtrl+Alt+O", null, delegate { TurnOffScreen(); });
             autoStartItem = new ToolStripMenuItem("Start with Windows");
@@ -613,18 +875,67 @@ namespace ScreenDimmer
             autoStartItem.Click += delegate { SetAutoStart(autoStartItem.Checked); };
             menu.Items.Add(autoStartItem);
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("Exit", null, delegate { Close(); });
+            menu.Items.Add("Exit\tCtrl+Alt+Q", null, delegate { Close(); });
 
             tray = new NotifyIcon();
-            tray.Icon = Icon;
+            tray.Icon = BuildTrayIcon();
             tray.Text = "Screen Dimmer";
             tray.ContextMenuStrip = menu;
             tray.Visible = true;
             tray.DoubleClick += delegate { ShowPanel(); };
         }
 
+        private static Icon LoadEmbeddedIcon(int size)
+        {
+            try
+            {
+                System.Reflection.Assembly asm = typeof(Program).Assembly;
+                foreach (string name in asm.GetManifestResourceNames())
+                {
+                    if (name.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
+                    {
+                        using (Stream stream = asm.GetManifestResourceStream(name))
+                        {
+                            if (stream != null)
+                            {
+                                return new Icon(stream, size, size);
+                            }
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                Icon exeIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+                if (exeIcon != null)
+                {
+                    if (exeIcon.Width == size && exeIcon.Height == size) return exeIcon;
+                    return new Icon(exeIcon, size, size);
+                }
+            }
+            catch
+            {
+            }
+
+            return null;
+        }
+
+        private static Icon BuildTrayIcon()
+        {
+            Icon loaded = LoadEmbeddedIcon(16);
+            if (loaded != null) return loaded;
+            return BuildIcon();
+        }
+
         private static Icon BuildIcon()
         {
+            Icon loaded = LoadEmbeddedIcon(32);
+            if (loaded != null) return loaded;
+
             Bitmap bmp = new Bitmap(32, 32);
             using (Graphics g = Graphics.FromImage(bmp))
             {
@@ -771,22 +1082,80 @@ namespace ScreenDimmer
 
         private void SetLevel(int value)
         {
-            level = value;
-            Apply(true);
-            if (!Visible) ShowPanel();
+            level = Clamp(value, MinLevel, MaxLevel);
+            Apply(false);
+            ScheduleSaveSettings();
         }
 
         private void SetWarm(int value)
         {
-            warm = value;
-            Apply(true);
-            if (!Visible) ShowPanel();
+            warm = Clamp(value, MinWarm, MaxWarm);
+            Apply(false);
+            ScheduleSaveSettings();
+        }
+
+        private void AnimateTo(int newLevel, int newWarm)
+        {
+            targetLevel = Clamp(newLevel, MinLevel, MaxLevel);
+            targetWarm = Clamp(newWarm, MinWarm, MaxWarm);
+            animTimer.Start();
+        }
+
+        private void OnAnimTick(object sender, EventArgs e)
+        {
+            bool doneLevel = true;
+            bool doneWarm = true;
+
+            if (targetLevel >= 0)
+            {
+                int diff = targetLevel - level;
+                if (Math.Abs(diff) <= 2)
+                {
+                    level = targetLevel;
+                    targetLevel = -1;
+                }
+                else
+                {
+                    level += Math.Sign(diff) * Math.Max(2, Math.Abs(diff) / 4);
+                    doneLevel = false;
+                }
+            }
+
+            if (targetWarm >= 0)
+            {
+                int diff = targetWarm - warm;
+                if (Math.Abs(diff) <= 2)
+                {
+                    warm = targetWarm;
+                    targetWarm = -1;
+                }
+                else
+                {
+                    warm += Math.Sign(diff) * Math.Max(2, Math.Abs(diff) / 4);
+                    doneWarm = false;
+                }
+            }
+
+            Apply(false);
+
+            if (doneLevel && doneWarm)
+            {
+                animTimer.Stop();
+                ScheduleSaveSettings();
+            }
+        }
+
+        private void ScheduleSaveSettings()
+        {
+            saveTimer.Stop();
+            saveTimer.Start();
         }
 
         /// <summary>Turns the monitor off, like the laptop's own button; any input wakes it.</summary>
         public void TurnOffScreen()
         {
             Log("screen off");
+            saveTimer.Stop();
             SaveSettings();
             Native.SendMessage(Native.HWND_BROADCAST, Native.WM_SYSCOMMAND,
                 new IntPtr(Native.SC_MONITORPOWER), new IntPtr(2));
@@ -808,8 +1177,12 @@ namespace ScreenDimmer
 
         public void ShowPanel()
         {
+            allowVisible = true;
             Show();
-            Opacity = 1.0;
+            if (!fadeTimer.Enabled)
+            {
+                Opacity = 1.0;
+            }
             Activate();
             BringToFront();
             RaisePanel();
@@ -830,20 +1203,48 @@ namespace ScreenDimmer
         private void OnDimChanged(object sender, EventArgs e)
         {
             if (updating) return;
+            animTimer.Stop();
             level = dimSlider.Value;
-            Apply(true);
+            Apply(false);
+            ScheduleSaveSettings();
         }
 
         private void OnWarmChanged(object sender, EventArgs e)
         {
             if (updating) return;
+            animTimer.Stop();
             warm = warmSlider.Value;
-            Apply(true);
+            Apply(false);
+            ScheduleSaveSettings();
         }
 
         private void OnDisplaySettingsChanged(object sender, EventArgs e)
         {
+            Log("display settings changed");
             CreateOverlays();
+            if (hasSavedPosition && !IsOnScreen(savedPosition))
+            {
+                MoveToSavedPlace();
+            }
+        }
+
+        private void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)
+        {
+            if (e.Mode == PowerModes.Resume)
+            {
+                Log("system resumed from sleep");
+                CreateOverlays();
+                RaisePanel();
+            }
+        }
+
+        private void OnSessionSwitch(object sender, SessionSwitchEventArgs e)
+        {
+            if (e.Reason == SessionSwitchReason.SessionUnlock)
+            {
+                Log("session unlocked");
+                RaisePanel();
+            }
         }
 
         // ---------- global hotkeys ----------
@@ -875,10 +1276,34 @@ namespace ScreenDimmer
             if (m.Msg == WM_HOTKEY)
             {
                 int id = m.WParam.ToInt32();
-                if (id == HotkeyDim) { SetLevel(level + StepLevel); return; }
-                if (id == HotkeyBright) { SetLevel(level - StepLevel); return; }
-                if (id == HotkeyWarm) { SetWarm(warm + StepWarm); return; }
-                if (id == HotkeyCool) { SetWarm(warm - StepWarm); return; }
+                if (id == HotkeyDim)
+                {
+                    animTimer.Stop();
+                    SetLevel(level + StepLevel);
+                    if (!Visible) osd.ShowOsd("Dim", level + "%", level, Theme.AccentDim);
+                    return;
+                }
+                if (id == HotkeyBright)
+                {
+                    animTimer.Stop();
+                    SetLevel(level - StepLevel);
+                    if (!Visible) osd.ShowOsd("Dim", level + "%", level, Theme.AccentDim);
+                    return;
+                }
+                if (id == HotkeyWarm)
+                {
+                    animTimer.Stop();
+                    SetWarm(warm + StepWarm);
+                    if (!Visible) osd.ShowOsd("Warmth", DescribeWarmth(warm), warm, Theme.AccentWarm);
+                    return;
+                }
+                if (id == HotkeyCool)
+                {
+                    animTimer.Stop();
+                    SetWarm(warm - StepWarm);
+                    if (!Visible) osd.ShowOsd("Warmth", DescribeWarmth(warm), warm, Theme.AccentWarm);
+                    return;
+                }
                 if (id == HotkeyOff) { TurnOffScreen(); return; }
                 if (id == HotkeyShow) { ShowPanel(); return; }
                 if (id == HotkeyQuit) { Close(); return; }
@@ -997,7 +1422,7 @@ namespace ScreenDimmer
                     @"Software\Microsoft\Windows\CurrentVersion\Run", true))
                 {
                     if (key == null) return;
-                    if (enabled) key.SetValue("ScreenDimmer", "\"" + ExePath + "\"");
+                    if (enabled) key.SetValue("ScreenDimmer", "\"" + ExePath + "\" --tray");
                     else key.DeleteValue("ScreenDimmer", false);
                 }
             }
@@ -1013,7 +1438,6 @@ namespace ScreenDimmer
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
-            RegisterHotkeys();
             Opacity = 0.0;
             fadeTimer.Start();
         }
@@ -1021,6 +1445,7 @@ namespace ScreenDimmer
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             Log("closing, reason=" + e.CloseReason);
+            saveTimer.Stop();
             SaveSettings();
             Native.UnregisterHotKey(Handle, HotkeyDim);
             Native.UnregisterHotKey(Handle, HotkeyBright);
@@ -1030,6 +1455,8 @@ namespace ScreenDimmer
             Native.UnregisterHotKey(Handle, HotkeyCool);
             Native.UnregisterHotKey(Handle, HotkeyOff);
             SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
+            SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+            SystemEvents.SessionSwitch -= OnSessionSwitch;
             base.OnFormClosing(e);
         }
 
@@ -1039,6 +1466,15 @@ namespace ScreenDimmer
             {
                 fadeTimer.Stop();
                 fadeTimer.Dispose();
+                saveTimer.Stop();
+                saveTimer.Dispose();
+                animTimer.Stop();
+                animTimer.Dispose();
+                if (osd != null)
+                {
+                    osd.Dispose();
+                    osd = null;
+                }
                 if (tray != null)
                 {
                     tray.Visible = false;
@@ -1064,7 +1500,17 @@ namespace ScreenDimmer
         [STAThread]
         private static void Main()
         {
-            Native.SetProcessDPIAware();
+            try
+            {
+                if (!Native.SetProcessDpiAwarenessContext(Native.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2))
+                {
+                    Native.SetProcessDPIAware();
+                }
+            }
+            catch
+            {
+                Native.SetProcessDPIAware();
+            }
 
             bool isFirst;
             using (Mutex mutex = new Mutex(true, MutexName, out isFirst))
@@ -1088,7 +1534,21 @@ namespace ScreenDimmer
                 };
                 PanelForm.Log("start");
 
-                PanelForm form = new PanelForm();
+                bool startInTray = false;
+                string[] cmdArgs = Environment.GetCommandLineArgs();
+                for (int i = 1; i < cmdArgs.Length; i++)
+                {
+                    string arg = cmdArgs[i];
+                    if (string.Equals(arg, "--tray", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(arg, "--minimized", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(arg, "/tray", StringComparison.OrdinalIgnoreCase))
+                    {
+                        startInTray = true;
+                        break;
+                    }
+                }
+
+                PanelForm form = new PanelForm(startInTray);
                 StartShowListener(form);
                 Application.Run(form);
 

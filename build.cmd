@@ -12,7 +12,11 @@ if not exist "%CSC%" (
 
 if not exist "%~dp0dist" mkdir "%~dp0dist"
 
+set "ICON_ARGS="
+if exist "%~dp0assets\app.ico" set ICON_ARGS=/win32icon:"%~dp0assets\app.ico" /resource:"%~dp0assets\app.ico"
+
 "%CSC%" /nologo /target:winexe /platform:anycpu /optimize+ ^
+    %ICON_ARGS% ^
     /out:"%~dp0dist\ScreenDimmer.exe" ^
     /reference:System.Windows.Forms.dll /reference:System.Drawing.dll ^
     "%~dp0src\ScreenDimmer.cs"

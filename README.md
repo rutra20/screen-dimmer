@@ -1,4 +1,4 @@
-# Screen Dimmer
+# <img src="assets/icon.png" width="36" height="36" align="center" alt="Screen Dimmer Icon" /> Screen Dimmer
 
 A tiny, dependency-free screen dimmer for Windows 10/11.
 
@@ -24,10 +24,12 @@ low-blue-light screen.
 - **Warmth** 6500 K (neutral) → 2700 K (warm), like a night-light for the screen.
 - **Screen off** — turns the monitor off while the session keeps running
   (any key or mouse move brings it back).
-- **Global hotkeys**, works while the panel is hidden.
+- **Global hotkeys** with a transient on-screen display (OSD) HUD when the panel is hidden.
 - **Tray icon**, remembers your settings and the panel position.
-- **Start with Windows** (optional, one click in the tray menu).
-- Multi-monitor aware, DPI aware, single instance.
+- **Start with Windows** (starts silently in the system tray via `--tray`).
+- **Smooth transitions** when toggling presets from the tray menu.
+- **Escape / Close to tray** — pressing `Esc` or clicking `X` hides to tray without quitting the dimmer.
+- Per-Monitor DPI Aware v2, Windows 11 rounded corners & drop shadow, single instance.
 
 ## Quick start
 

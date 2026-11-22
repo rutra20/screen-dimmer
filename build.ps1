@@ -15,10 +15,17 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $source = Join-Path $root 'src\ScreenDimmer.cs'
 $dist = Join-Path $root 'dist'
 $target = Join-Path $dist 'ScreenDimmer.exe'
+$icon = Join-Path $root 'assets\app.ico'
 
 New-Item -ItemType Directory -Path $dist -Force | Out-Null
 
+$iconArgs = @()
+if (Test-Path $icon) {
+    $iconArgs = @("/win32icon:$icon", "/resource:$icon")
+}
+
 & $compiler /nologo /target:winexe /platform:anycpu /optimize+ /out:$target `
+    @iconArgs `
     /reference:System.Windows.Forms.dll /reference:System.Drawing.dll `
     $source
 
